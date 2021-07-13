@@ -39,48 +39,60 @@ const (
 )
 
 // validateBothOrNeither ensures that both options are provided, if either is provided.
-func validateBothOrNeither(option1, option2 string) {
+func validateBothOrNeither(option1, option2 string) error {
 	arg1, arg2 := viper.GetString(option1), viper.GetString(option2)
 	if arg1 != "" && arg2 == "" {
-		stdLog.Fatalf("Invalid config: %s = %s, but corresponding option %s is not configured", option1, arg1, option2)
+		return fmt.Errorf("Invalid config: %s = %s, but corresponding option %s is not configured", option1, arg1, option2)
 	}
 	if arg1 == "" && arg2 != "" {
-		stdLog.Fatalf("Invalid config: %s = %s, but corresponding option %s is not configured", option2, arg2, option1)
+		return fmt.Errorf("Invalid config: %s = %s, but corresponding option %s is not configured", option2, arg2, option1)
 	}
+	return nil
 }
 
-func applyMigrations(config Config) {
+func applyMigrations(config Config) error {
 	dbConn, err := db.Open("postgres", config.DatabaseURL)
 	if err != nil {
-		stdLog.Fatalf("could not connect to horizon db: %v", err)
+		return fmt.Errorf("could not connect to horizon db: %v", err)
 	}
 	defer dbConn.Close()
 
 	numMigrations, err := schema.Migrate(dbConn.DB.DB, schema.MigrateUp, 0)
 	if err != nil {
-		stdLog.Fatalf("could not apply migrations: %v", err)
+		return fmt.Errorf("could not apply migrations: %v", err)
 	}
 	if numMigrations > 0 {
 		stdLog.Printf("successfully applied %v horizon migrations\n", numMigrations)
 	}
+	return nil
 }
 
 // checkMigrations looks for necessary database migrations and fails with a descriptive error if migrations are needed.
-func checkMigrations(config Config) {
+func checkMigrations(config Config) error {
 	migrationsToApplyUp := schema.GetMigrationsUp(config.DatabaseURL)
 	if len(migrationsToApplyUp) > 0 {
-		stdLog.Printf(`There are %v migrations to apply in the "up" direction.`, len(migrationsToApplyUp))
-		stdLog.Printf("The necessary migrations are: %v", migrationsToApplyUp)
-		stdLog.Printf("A database migration is required to run this version (%v) of Horizon. Run \"horizon db migrate up\" to update your DB. Consult the Changelog (https://github.com/stellar/go/blob/master/services/horizon/CHANGELOG.md) for more information.", apkg.Version())
-		os.Exit(1)
+		return fmt.Errorf(`
+		There are %v migrations to apply in the "up" direction.
+		The necessary migrations are: %v
+		A database migration is required to run this version (%v) of Horizon. Run "horizon db migrate up" to update your DB. Consult the Changelog (https://github.com/stellar/go/blob/master/services/horizon/CHANGELOG.md) for more information.
+			`,
+			len(migrationsToApplyUp),
+			migrationsToApplyUp,
+			apkg.Version(),
+		)
 	}
 
 	nMigrationsDown := schema.GetNumMigrationsDown(config.DatabaseURL)
 	if nMigrationsDown > 0 {
-		stdLog.Printf("A database migration DOWN to an earlier version of the schema is required to run this version (%v) of Horizon. Consult the Changelog (https://github.com/stellar/go/blob/master/services/horizon/CHANGELOG.md) for more information.", apkg.Version())
-		stdLog.Printf("In order to migrate the database DOWN, using the HIGHEST version number of Horizon you have installed (not this binary), run \"horizon db migrate down %v\".", nMigrationsDown)
-		os.Exit(1)
+		return fmt.Errorf(`
+		A database migration DOWN to an earlier version of the schema is required to run this version (%v) of Horizon. Consult the Changelog (https://github.com/stellar/go/blob/master/services/horizon/CHANGELOG.md) for more information.
+		In order to migrate the database DOWN, using the HIGHEST version number of Horizon you have installed (not this binary), run "horizon db migrate down %v".
+			`,
+			apkg.Version(),
+			nMigrationsDown,
+		)
 	}
+	return nil
 }
 
 // Flags returns a Config instance and a list of commandline flags which modify the Config instance
@@ -466,20 +478,20 @@ func Flags() (*Config, support.ConfigOptions) {
 }
 
 // NewAppFromFlags constructs a new Horizon App from the given command line flags
-func NewAppFromFlags(config *Config, flags support.ConfigOptions) *App {
+func NewAppFromFlags(config *Config, flags support.ConfigOptions) (*App, error) {
 	ApplyFlags(config, flags, ApplyOptions{RequireCaptiveCoreConfig: true, AlwaysIngest: false})
 	// Validate app-specific arguments
 	if config.StellarCoreURL == "" {
-		log.Fatalf("flag --%s cannot be empty", StellarCoreURLFlagName)
+		return nil, fmt.Errorf("flag --%s cannot be empty", StellarCoreURLFlagName)
 	}
 	if config.Ingest && !config.EnableCaptiveCoreIngestion && config.StellarCoreDatabaseURL == "" {
-		log.Fatalf("flag --%s cannot be empty", StellarCoreDBURLFlagName)
+		return nil, fmt.Errorf("flag --%s cannot be empty", StellarCoreDBURLFlagName)
 	}
 	app, err := NewApp(*config)
 	if err != nil {
-		log.Fatalf("cannot initialize app: %s", err)
+		return nil, fmt.Errorf("cannot initialize app: %s", err)
 	}
-	return app
+	return app, nil
 }
 
 type ApplyOptions struct {
@@ -488,13 +500,17 @@ type ApplyOptions struct {
 }
 
 // ApplyFlags applies the command line flags on the given Config instance
-func ApplyFlags(config *Config, flags support.ConfigOptions, options ApplyOptions) {
+func ApplyFlags(config *Config, flags support.ConfigOptions, options ApplyOptions) error {
 	// Verify required options and load the config struct
-	flags.Require()
+	if err := flags.RequireE(); err != nil {
+		return err
+	}
 	flags.SetValues()
 
 	// Validate options that should be provided together
-	validateBothOrNeither("tls-cert", "tls-key")
+	if err := validateBothOrNeither("tls-cert", "tls-key"); err != nil {
+		return err
+	}
 
 	if options.AlwaysIngest {
 		config.Ingest = true
@@ -505,7 +521,9 @@ func ApplyFlags(config *Config, flags support.ConfigOptions, options ApplyOption
 		// only on ingesting instances which are required to have write-access
 		// to the DB.
 		if config.ApplyMigrations {
-			applyMigrations(*config)
+			if err := applyMigrations(*config); err != nil {
+				return err
+			}
 		}
 		checkMigrations(*config)
 

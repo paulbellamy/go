@@ -38,6 +38,16 @@ func (cos ConfigOptions) Require() {
 	}
 }
 
+// RequireE is like Require, but returns the error instead of Fatal
+func (cos ConfigOptions) RequireE() error {
+	for _, co := range cos {
+		if err := co.RequireE(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SetValues calls SetValue on each ConfigOption.
 func (cos ConfigOptions) SetValues() {
 	for _, co := range cos {
@@ -77,10 +87,18 @@ func (co *ConfigOption) Bind() {
 
 // Require checks that a required string configuration option is not empty, raising a user error if it is.
 func (co *ConfigOption) Require() {
+	if err := co.RequireE(); err != nil {
+		stdLog.Fatal(err.Error())
+	}
+}
+
+// RequireE is like Require, but returns the error instead of Fatal
+func (co *ConfigOption) RequireE() error {
 	co.Bind()
 	if co.Required && viper.GetString(co.Name) == "" {
-		stdLog.Fatalf("Invalid config: %s is blank. Please specify --%s on the command line or set the %s environment variable.", co.Name, co.Name, co.EnvVar)
+		return fmt.Errorf("Invalid config: %s is blank. Please specify --%s on the command line or set the %s environment variable.", co.Name, co.Name, co.EnvVar)
 	}
+	return nil
 }
 
 // SetValue sets a value in the global config, using a custom function, if one was provided.

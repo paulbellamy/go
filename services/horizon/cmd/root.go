@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	stdLog "log"
 
 	"github.com/spf13/cobra"
@@ -15,10 +16,24 @@ var (
 		Short: "client-facing api server for the Stellar network",
 		Long:  "Client-facing API server for the Stellar network. It acts as the interface between Stellar Core and applications that want to access the Stellar network. It allows you to submit transactions to the network, check the status of accounts, subscribe to event streams and more.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return horizon.NewAppFromFlags(config, flags).Serve()
+			app, err := horizon.NewAppFromFlags(config, flags)
+			if err != nil {
+				return err
+			}
+			return app.Serve()
 		},
 	}
+
+	// ErrUsage indicates we printed the usage string, so just exit with code 1
+	ErrUsage = ErrExitCode(1)
 )
+
+// Indicates we want to exit with a specific error code without printing an error.
+type ErrExitCode int
+
+func (e ErrExitCode) Error() string {
+	return fmt.Sprintf("exit code: %d", e)
+}
 
 func init() {
 	err := flags.Init(RootCmd)
