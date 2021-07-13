@@ -85,7 +85,7 @@ func NewApp(config Config) (*App, error) {
 
 // Serve starts the horizon web server, binding it to a socket, setting up
 // the shutdown signals.
-func (a *App) Serve() {
+func (a *App) Serve() error {
 
 	log.Infof("Starting horizon on :%d (ingest: %v)", a.config.Port, a.config.Ingest)
 
@@ -128,13 +128,14 @@ func (a *App) Serve() {
 
 	err := a.webServer.Serve()
 	if err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+		return err
 	}
 
 	wg.Wait()
 	a.CloseDB()
 
 	log.Info("stopped")
+	return nil
 }
 
 // Close cancels the app. It does not close DB connections - use App.CloseDB().
